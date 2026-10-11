@@ -10,7 +10,11 @@ from nomad.datamodel.metainfo.workflow import Workflow
 from nomad.datamodel.results import Material, Relation, Results, System
 from nomad.units import ureg
 from nomad.utils import get_logger
-from nomad_simulations.schema_packages.atoms_state import AtomsState
+from nomad_simulations.schema_packages.atoms_state import (
+    AtomsState,
+    CGBeadState,
+    ParticleState,
+)
 from nomad_simulations.schema_packages.general import Simulation
 from nomad_simulations.schema_packages.model_system import (
     AlternativeRepresentation,
@@ -198,6 +202,128 @@ def test_topology_root_populates_atoms_when_ase_conversion_fails(monkeypatch):
     assert isinstance(original.atoms, expected_atoms_cls)
     assert original.atoms.positions is not None
     assert len(original.atoms.positions) == 2
+
+
+def test_topology_root_preserves_non_atomic_particle_labels():
+    archive = EntryArchive(metadata=EntryMetadata())
+
+    root = ModelSystem(
+        name='coarse_grained_system',
+        type='molecule',
+        is_representative=True,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    root.particle_states.append(
+        CGBeadState(bead_symbol='WN1', label='water_negative')
+    )
+    root.particle_states.append(
+        CGBeadState(bead_symbol='WP1', label='water_positive')
+    )
+    root.sub_systems.append(
+        ModelSystem(
+            name='beads',
+            branch_label='beads',
+            particle_indices=np.array([0, 1], dtype=np.int32),
+        )
+    )
+
+    simulation = Simulation()
+    simulation.model_system.append(root)
+    archive.data = simulation
+    archive.results = Results()
+    archive.results.material = Material()
+
+    normalizer = TopologyNormalizer()
+    normalizer.normalize(archive, LOGGER)
+
+    original = archive.results.material.topology[0]
+    assert original.atoms.labels == ['WN1', 'WP1']
+    assert original.atoms.atomic_numbers.tolist() == [0, 0]
+    assert original.atoms.species.tolist() == [0, 0]
+    assert not original.elements
+    assert all(
+        system.chemical_formula_reduced is None
+        for system in archive.results.material.topology
+    )
+
+
+def test_topology_root_exports_mixed_particle_identities_without_partial_formula():
+    archive = EntryArchive(metadata=EntryMetadata())
+
+    root = ModelSystem(
+        name='mixed_system',
+        type='molecule',
+        is_representative=True,
+        positions=np.array(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]
+        )
+        * ureg.angstrom,
+        n_particles=3,
+    )
+    root.particle_states.append(AtomsState(chemical_symbol='O', label='OW'))
+    root.particle_states.append(CGBeadState(bead_symbol='WN1'))
+    root.particle_states.append(ParticleState(label='generic'))
+    root.sub_systems.append(
+        ModelSystem(
+            name='particles',
+            branch_label='molecule',
+            particle_indices=np.array([0, 1, 2], dtype=np.int32),
+        )
+    )
+
+    simulation = Simulation()
+    simulation.model_system.append(root)
+    archive.data = simulation
+    archive.results = Results(material=Material())
+
+    TopologyNormalizer().normalize(archive, LOGGER)
+
+    original = archive.results.material.topology[0]
+    assert original.atoms.labels == ['O', 'WN1', 'generic']
+    assert original.atoms.atomic_numbers.tolist() == [8, 0, 0]
+    assert original.atoms.species.tolist() == [8, 0, 0]
+    assert not original.elements
+    assert all(
+        system.chemical_formula_reduced is None
+        for system in archive.results.material.topology
+    )
+
+
+def test_topology_root_pads_missing_particle_states_without_hydrogen():
+    archive = EntryArchive(metadata=EntryMetadata())
+
+    root = ModelSystem(
+        name='incomplete_system',
+        type='molecule',
+        is_representative=True,
+        positions=np.zeros((2, 3)) * ureg.angstrom,
+        n_particles=2,
+    )
+    root.particle_states.append(AtomsState(chemical_symbol='O'))
+    root.sub_systems.append(
+        ModelSystem(
+            name='particles',
+            branch_label='molecule',
+            particle_indices=np.array([0, 1], dtype=np.int32),
+        )
+    )
+
+    simulation = Simulation()
+    simulation.model_system.append(root)
+    archive.data = simulation
+    archive.results = Results(material=Material())
+
+    TopologyNormalizer().normalize(archive, LOGGER)
+
+    original = archive.results.material.topology[0]
+    assert original.atoms.labels == ['O', 'X']
+    assert original.atoms.atomic_numbers.tolist() == [8, 0]
+    assert original.atoms.species.tolist() == [8, 0]
+    assert all(
+        system.chemical_formula_reduced is None
+        for system in archive.results.material.topology
+    )
 
 
 def test_topology_calculation_prefers_representative_system():

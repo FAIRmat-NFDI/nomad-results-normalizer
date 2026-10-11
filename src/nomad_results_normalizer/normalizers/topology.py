@@ -180,23 +180,6 @@ def add_system_info_2(  # noqa: PLR0912
         parent_system: The parent System with positions and particle_states
     """
 
-    def _particle_symbols(states, indices=None) -> list[str]:
-        symbols = []
-        if not states:
-            return symbols
-        iterable = range(len(states)) if indices is None else indices
-        for idx in iterable:
-            if idx >= len(states):
-                continue
-            state = states[idx]
-            if state.chemical_symbol:
-                symbols.append(state.chemical_symbol)
-            elif state.atomic_number:
-                normalized_number = _normalize_atomic_number(state.atomic_number)
-                if normalized_number is not None:
-                    symbols.append(chemical_symbols[normalized_number])
-        return symbols
-
     def _normalize_atomic_number(number, symbol=None) -> int | None:
         normalized = None
         if number is not None:
@@ -214,6 +197,43 @@ def add_system_info_2(  # noqa: PLR0912
         if normalized is None and symbol:
             normalized = _atomic_numbers.get(symbol)
         return normalized
+
+    def _particle_identity(state) -> tuple[str, int]:
+        """Return a display label and atomic number for any particle state."""
+        if state is None:
+            return 'X', 0
+
+        symbol = getattr(state, 'chemical_symbol', None)
+        number = getattr(state, 'atomic_number', None)
+        normalized_number = _normalize_atomic_number(number, symbol)
+        if normalized_number is not None and normalized_number > 0:
+            return str(chemical_symbols[normalized_number]), normalized_number
+
+        label = None
+        get_label = getattr(state, 'get_label', None)
+        if callable(get_label):
+            try:
+                label = get_label()
+            except Exception:
+                label = None
+        if not label:
+            label = getattr(state, 'label', None)
+        return str(label or 'X'), 0
+
+    def _particle_symbols(states, indices=None) -> list[str]:
+        """Return symbols only when every selected particle is atomic."""
+        if not states:
+            return []
+        iterable = range(len(states)) if indices is None else indices
+        symbols = []
+        for idx in iterable:
+            if idx < 0 or idx >= len(states):
+                return []
+            _, atomic_number = _particle_identity(states[idx])
+            if atomic_number == 0:
+                return []
+            symbols.append(str(chemical_symbols[atomic_number]))
+        return symbols
 
     def _populate_chemistry(system: System, symbols: list[str]) -> None:
         if not symbols:
@@ -268,17 +288,9 @@ def add_system_info_2(  # noqa: PLR0912
         labels = []
         atomic_numbers = []
         for state in particle_states:
-            symbol = state.chemical_symbol
-            number = state.atomic_number
-            normalized_number = _normalize_atomic_number(number, symbol)
-            if symbol is None and normalized_number is not None:
-                symbol = chemical_symbols[normalized_number]
-            elif symbol is not None and normalized_number is None:
-                normalized_number = _atomic_numbers.get(symbol)
-            if normalized_number is None or normalized_number <= 0:
-                normalized_number = 1
-            labels.append(symbol if symbol is not None else 'X')
-            atomic_numbers.append(int(normalized_number))
+            label, atomic_number = _particle_identity(state)
+            labels.append(label)
+            atomic_numbers.append(atomic_number)
 
         n_positions = len(pos_arr)
         if len(labels) != n_positions:
@@ -286,7 +298,7 @@ def add_system_info_2(  # noqa: PLR0912
             if len(labels) < n_positions:
                 missing = n_positions - len(labels)
                 labels.extend(['X'] * missing)
-                atomic_numbers.extend([1] * missing)
+                atomic_numbers.extend([0] * missing)
             else:
                 labels = labels[:n_positions]
                 atomic_numbers = atomic_numbers[:n_positions]
@@ -337,6 +349,10 @@ def add_system_info_2(  # noqa: PLR0912
                 system.atoms = _nomad_atoms_from_model_system(parent_system)
 
             symbols = _particle_symbols(particle_states)
+            if parent_system.positions is not None and len(symbols) != len(
+                parent_system.positions
+            ):
+                symbols = []
             _populate_chemistry(system, symbols)
         except Exception:
             pass
