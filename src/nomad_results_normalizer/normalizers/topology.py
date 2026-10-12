@@ -287,10 +287,21 @@ def add_system_info_2(  # noqa: PLR0912
         particle_states = model_system.particle_states or []
         labels = []
         atomic_numbers = []
+        masses = []
         for state in particle_states:
             label, atomic_number = _particle_identity(state)
             labels.append(label)
             atomic_numbers.append(atomic_number)
+            mass = getattr(state, 'mass', None)
+            try:
+                mass_kg = (
+                    float(mass.to(ureg.kilogram).magnitude)
+                    if hasattr(mass, 'to')
+                    else float(mass)
+                )
+            except (TypeError, ValueError, AttributeError):
+                mass_kg = 0.0
+            masses.append(mass_kg if np.isfinite(mass_kg) and mass_kg > 0 else 0.0)
 
         n_positions = len(pos_arr)
         if len(labels) != n_positions:
@@ -299,15 +310,19 @@ def add_system_info_2(  # noqa: PLR0912
                 missing = n_positions - len(labels)
                 labels.extend(['X'] * missing)
                 atomic_numbers.extend([0] * missing)
+                masses.extend([0.0] * missing)
             else:
                 labels = labels[:n_positions]
                 atomic_numbers = atomic_numbers[:n_positions]
+                masses = masses[:n_positions]
 
         atoms = NOMADAtoms()
         atoms.positions = pos_arr * ureg.meter
         atoms.labels = labels
         atoms.atomic_numbers = atomic_numbers
         atoms.species = atomic_numbers
+        if any(masses):
+            atoms.masses = np.asarray(masses) * ureg.kilogram
         lattice_vectors = model_system.lattice_vectors
         lattice_arr = _to_meter_array(lattice_vectors)
         if lattice_arr is not None:

@@ -215,10 +215,10 @@ def test_topology_root_preserves_non_atomic_particle_labels():
         n_particles=2,
     )
     root.particle_states.append(
-        CGBeadState(bead_symbol='WN1', label='water_negative')
+        CGBeadState(bead_symbol='WN1', label='water_negative', mass=72.0 * ureg.amu)
     )
     root.particle_states.append(
-        CGBeadState(bead_symbol='WP1', label='water_positive')
+        CGBeadState(bead_symbol='WP1', label='water_positive', mass=36.0 * ureg.amu)
     )
     root.sub_systems.append(
         ModelSystem(
@@ -241,6 +241,10 @@ def test_topology_root_preserves_non_atomic_particle_labels():
     assert original.atoms.labels == ['WN1', 'WP1']
     assert original.atoms.atomic_numbers.tolist() == [0, 0]
     assert original.atoms.species.tolist() == [0, 0]
+    np.testing.assert_allclose(
+        original.atoms.masses.to(ureg.amu).magnitude,
+        [72.0, 36.0],
+    )
     assert not original.elements
     assert all(
         system.chemical_formula_reduced is None
@@ -255,14 +259,12 @@ def test_topology_root_exports_mixed_particle_identities_without_partial_formula
         name='mixed_system',
         type='molecule',
         is_representative=True,
-        positions=np.array(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]
-        )
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
         * ureg.angstrom,
         n_particles=3,
     )
     root.particle_states.append(AtomsState(chemical_symbol='O', label='OW'))
-    root.particle_states.append(CGBeadState(bead_symbol='WN1'))
+    root.particle_states.append(CGBeadState(bead_symbol='WN1', mass=72.0 * ureg.amu))
     root.particle_states.append(ParticleState(label='generic'))
     root.sub_systems.append(
         ModelSystem(
@@ -283,6 +285,10 @@ def test_topology_root_exports_mixed_particle_identities_without_partial_formula
     assert original.atoms.labels == ['O', 'WN1', 'generic']
     assert original.atoms.atomic_numbers.tolist() == [8, 0, 0]
     assert original.atoms.species.tolist() == [8, 0, 0]
+    np.testing.assert_allclose(
+        original.atoms.masses.to(ureg.amu).magnitude,
+        [0.0, 72.0, 0.0],
+    )
     assert not original.elements
     assert all(
         system.chemical_formula_reduced is None
