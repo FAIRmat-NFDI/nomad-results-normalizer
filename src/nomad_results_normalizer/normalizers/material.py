@@ -176,16 +176,19 @@ class MaterialNormalizer:
                     hill_formula = self.repr_system.chemical_formula.hill
 
                 if not hill_formula and particle_states:
-                    labels = [
-                        ps.chemical_symbol
-                        for ps in particle_states
-                        if ps.chemical_symbol
+                    particle_symbols = [
+                        getattr(particle_state, 'chemical_symbol', None)
+                        for particle_state in particle_states
                     ]
-                if not labels:
+                    if all(particle_symbols):
+                        labels = particle_symbols
+                # Particle states are authoritative when present. Do not fall back to
+                # topology labels for CG or mixed systems: bead labels are not formulas.
+                if not labels and not particle_states:
                     labels = self._labels_from_atoms_like(
                         self._read_attr_or_key(self.repr_system, 'atoms')
                     )
-                if not labels:
+                if not labels and not particle_states:
                     labels = self._labels_from_topology_root(material)
                 if not hill_formula and labels:
                     hill_formula = Formula(''.join(labels)).format('hill')
