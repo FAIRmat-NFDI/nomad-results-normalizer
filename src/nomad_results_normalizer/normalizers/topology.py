@@ -61,6 +61,7 @@ from nomad.datamodel.results import (
 )
 from nomad.datamodel.results import SymmetryNew as Symmetry
 from nomad.units import ureg
+from nomad_simulations.schema_packages.atoms_state import AtomsState, ParticleState
 
 # from nomad.normalizing import Normalizer
 from structlog.stdlib import BoundLogger
@@ -198,27 +199,19 @@ def add_system_info_2(  # noqa: PLR0912
             normalized = _atomic_numbers.get(symbol)
         return normalized
 
-    def _particle_identity(state) -> tuple[str, int]:
+    def _particle_identity(state: ParticleState | None) -> tuple[str, int]:
         """Return a display label and atomic number for any particle state."""
         if state is None:
             return 'X', 0
 
-        symbol = getattr(state, 'chemical_symbol', None)
-        number = getattr(state, 'atomic_number', None)
-        normalized_number = _normalize_atomic_number(number, symbol)
-        if normalized_number is not None and normalized_number > 0:
-            return str(chemical_symbols[normalized_number]), normalized_number
+        if isinstance(state, AtomsState):
+            normalized_number = _normalize_atomic_number(
+                state.atomic_number, state.chemical_symbol
+            )
+            if normalized_number is not None:
+                return str(chemical_symbols[normalized_number]), normalized_number
 
-        label = None
-        get_label = getattr(state, 'get_label', None)
-        if callable(get_label):
-            try:
-                label = get_label()
-            except Exception:
-                label = None
-        if not label:
-            label = getattr(state, 'label', None)
-        return str(label or 'X'), 0
+        return str(state.get_label() or 'X'), 0
 
     def _particle_symbols(states, indices=None) -> list[str]:
         """Return symbols only when every selected particle is atomic."""
