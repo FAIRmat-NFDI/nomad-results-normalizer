@@ -1,6 +1,7 @@
 """Tests for MaterialNormalizer v2 functionality."""
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -8,7 +9,7 @@ from nomad.datamodel import EntryArchive, EntryMetadata
 from nomad.datamodel.results import Material, Results
 from nomad.units import ureg
 from nomad.utils import get_logger
-from nomad_simulations.schema_packages.atoms_state import AtomsState
+from nomad_simulations.schema_packages.atoms_state import AtomsState, CGBeadState
 from nomad_simulations.schema_packages.general import Simulation
 from nomad_simulations.schema_packages.model_system import ModelSystem
 
@@ -120,6 +121,34 @@ class TestMaterialNormalizer:
         symbols = [state.chemical_symbol for state in system.particle_states]
         assert 'Na' in symbols
         assert 'Cl' in symbols
+
+    def test_coarse_grained_particle_states_do_not_create_formula(self):
+        archive = EntryArchive(metadata=EntryMetadata(), results=Results())
+        system = ModelSystem(is_representative=True)
+        system.particle_states.extend(
+            [
+                CGBeadState(bead_symbol='WN1', label='WN1'),
+                CGBeadState(bead_symbol='WP1', label='WP1'),
+            ]
+        )
+        archive.data = Simulation(model_system=[system])
+        logger = Mock()
+
+        material = MaterialNormalizer(
+            entry_archive=archive,
+            repr_system=system,
+            repr_symmetry=None,
+            spg_number=None,
+            conv_atoms=None,
+            wyckoff_sets=None,
+            properties=None,
+            optimade=None,
+            logger=logger,
+        ).material(populate_topology=False)
+
+        logger.error.assert_not_called()
+        assert material.chemical_formula_hill is None
+        assert material.chemical_formula_reduced_fragments is None
 
     @pytest.mark.parametrize('system_type', ['molecule', 'cluster'])
     def test_molecule_and_cluster_use_legacy_combined_structural_type(
