@@ -17,44 +17,41 @@
 #
 
 """
-Results Normalizer - Entry Point for Data-Schema Normalization
-==============================================================
+Results Normalizer - Entry Point for Simulation Results
+=======================================================
 
-This module provides the main entry point for nomad-simulations data-schema
-results normalization.
+This module populates results from simulation data in ``archive.data``.
 
 NORMALIZATION CASCADE ARCHITECTURE
 -----------------------------------
 
 Plugin Entry Point: results_normalizer_plugin (level 3)
     │
-    ├─── Detect data-schema availability: _is_data_schema(archive)
+    ├─── Find supported simulation data: _simulation_data_context(archive)
     │
-    └─── When data-schema is available:
+    └─── When simulation data is available:
             │
-            └─ Data-schema normalization
+            └─ Results normalization
                               │
                               ├─ Initialize results sections
                               └─ TopologyNormalizer.normalize()
 
-Schema Version Detection
-------------------------
+Simulation Data Detection
+-------------------------
 
-The _is_data_schema() method checks whether an entry additionally uses the
-nomad-simulations data-schema path by checking:
-1. archive.data attribute exists
-2. archive.data.model_system attribute exists
+The _simulation_data_context() method recognizes a simulation with a
+``model_system`` collection or a system section in ``archive.data``. This
+routes supported data to this normalizer; it does not identify a schema
+version.
 
-Entries with nomad-simulations data run the plugin's data-schema
-normalization. Other archives are left to the built-in NOMAD normalizers.
+Other archives are left to NOMAD's other normalizers.
 
 Design Principles
 -----------------
 
-- Single entry point: Adds data-schema result population after built-in normalizers
-- Precise detection: Only simulation data-schema archives trigger the plugin pass
-- Clean separation: data-schema code stays in plugin, legacy code stays in nomad-FAIR
-- No breaking changes: Existing entries continue to receive legacy results
+- Single entry point: Adds simulation results after built-in normalizers
+- Precise detection: Only supported ``archive.data`` content triggers this pass
+- No breaking changes: Other entries retain their existing results processing
 """
 
 import re
@@ -99,15 +96,13 @@ from nomad.utils import traverse_reversed
 re_label = re.compile('^([a-zA-Z][a-zA-Z]?)[^a-zA-Z]*')
 elements = set(ase.data.chemical_symbols)
 
-DATA_SCHEMA_COMPATIBILITY_ANNOTATION = (
-    'nomad_results_normalizer_data_schema_compatibility'
-)
-_LEGACY_DATA_SCHEMA_COMPATIBILITY_ANNOTATION = (
-    'nomad_topology_normalizer_v2_compatibility'
-)
+# Keep this persisted marker value for archives normalized by earlier releases.
+GENERATED_RESULTS_ANNOTATION = 'nomad_results_normalizer_data_schema_compatibility'
+# Keep recognizing this historical annotation when re-normalizing old archives.
+_HISTORICAL_COMPATIBILITY_ANNOTATION = 'nomad_topology_normalizer_v2_compatibility'
 _GENERATED_COMPATIBILITY_ANNOTATIONS = {
-    DATA_SCHEMA_COMPATIBILITY_ANNOTATION,
-    _LEGACY_DATA_SCHEMA_COMPATIBILITY_ANNOTATION,
+    GENERATED_RESULTS_ANNOTATION,
+    _HISTORICAL_COMPATIBILITY_ANNOTATION,
 }
 
 
@@ -147,15 +142,13 @@ def isint(value: Any) -> bool:
 # See:
 # nomad_results_normalizer/normalizers/__init__.py::ResultsNormalizerEntryPoint.load()
 class ResultsNormalizerBase:
-    """Results normalizer implementation with schema version detection.
+    """Results normalizer implementation for simulation data.
 
     WARNING: This is NOT the actual normalizer class used at runtime!
     The entry point creates a proper subclass dynamically. See class docstring above.
 
-    Strategy:
-    If nomad-simulations data is present, run the data-schema cascade to
-    add/override data-schema-derived results. Archives without data-schema
-    content are handled by NOMAD's built-in normalizers.
+    When supported simulation data is present, populate its results. Other
+    archives are handled by NOMAD's other normalizers.
     """
 
     domain = None
@@ -168,14 +161,12 @@ class ResultsNormalizerBase:
         if logger is not None:
             self.logger = logger.bind(normalizer=self.__class__.__name__)
 
-        # ========== LOGICAL SWITCH: data-schema pass ==========
-        data_schema_info = self._is_data_schema(archive)
+        has_simulation_data, source_system = self._simulation_data_context(archive)
 
-        if data_schema_info:
+        if has_simulation_data:
             from nomad_results_normalizer.normalizers.topology import TopologyNormalizer
 
-            system_v2 = data_schema_info if data_schema_info is not True else None
-            self.logger.info('Running data-schema results normalization')
+            self.logger.info('Running simulation results normalization')
 
             results = self.entry_archive.results
             if results is None:
@@ -184,47 +175,43 @@ class ResultsNormalizerBase:
                 results.m_create(Properties)
 
             topology_normalizer = TopologyNormalizer()
-            topology_normalizer.normalize(archive, self.logger, system_v2=system_v2)
-            self._normalize_method_with_data_schema(archive)
-            self._normalize_outputs_with_data_schema(archive)
+            topology_normalizer.normalize(
+                archive, self.logger, source_system=source_system
+            )
+            self._normalize_method_from_simulation(archive)
+            self._normalize_outputs_from_simulation(archive)
         else:
-            self.logger.info('Skipping data-schema results normalization')
+            self.logger.info('Skipping simulation results normalization')
 
         self.entry_archive = None
 
-    def _is_data_schema(self, archive: EntryArchive) -> Any:
-        """Check if archive uses the nomad-simulations data-schema path.
-
-        Returns a SystemV2 instance if found, True if indicated by
-        model_system but no instance found, or False.
-        """
+    def _simulation_data_context(self, archive: EntryArchive) -> tuple[bool, Any]:
+        """Return whether simulation data is present and its first system, if any."""
         if archive.data is None:
-            return False
+            return False, None
 
-        # Check if data has model_system (Simulation-style schema indicator).
+        # Simulation data exposes a model_system collection.
         try:
             has_model_system = archive.data.model_system is not None
         except Exception:
             has_model_system = False
 
-        # Some data-schema archives still embed a basesections v2 System.
-        from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
+        # ModelSystem derives from this core System class; direct and nested
+        # system sections are also supported.
+        from nomad.datamodel.metainfo.basesections.v2 import System as BaseSystem
 
         for sec in archive.data.m_all_contents(include_self=True):
-            if isinstance(sec, SystemV2):
-                return sec
+            if isinstance(sec, BaseSystem):
+                return True, sec
 
-        # If model_system attribute exists but is empty, still consider it a
-        # data-schema archive (e.g. partially parsed Simulation).
+        # An empty model_system still identifies a partially parsed simulation.
         if has_model_system:
-            return True
+            return True, None
 
-        # Non-simulation custom data sections (and any other data without
-        # model_system) are not handled by this plugin.
-        return False
+        return False, None
 
-    def _normalize_method_with_data_schema(self, archive: EntryArchive) -> None:
-        """Populate results.method from nomad-simulations data when available."""
+    def _normalize_method_from_simulation(self, archive: EntryArchive) -> None:
+        """Populate results.method from simulation data when available."""
 
         def _enum_values(section_cls, quantity_name: str) -> set[str]:
             return set(section_cls.m_def.all_quantities[quantity_name].type)
@@ -290,7 +277,7 @@ class ResultsNormalizerBase:
                     return 'plane waves'
                 if any('APW' in name for name in component_names):
                     return '(L)APW+lo'
-            # Legacy-equivalent fallback for common plane-wave codes.
+            # Match established results behavior for common plane-wave codes.
             if program_name and program_name.lower() in ('vasp', 'quantum espresso'):
                 return 'plane waves'
             return None
@@ -340,7 +327,7 @@ class ResultsNormalizerBase:
                     return value.to('joule').magnitude
                 # Some released nomad-simulations versions accept Pint input
                 # for flexible-unit quantities but expose only the original
-                # magnitude. For SCF energy thresholds, legacy results expect
+                # magnitude. For SCF energy thresholds, results expect
                 # eV-like values to be converted into their joule storage unit.
                 return (value * ureg.eV).to('joule').magnitude
             except Exception:
@@ -349,7 +336,7 @@ class ResultsNormalizerBase:
         def _map_dft_fields(
             model_method, simulation_method: DFT, program_name: str | None
         ) -> None:
-            # Keep legacy-equivalent transfer only.
+            # Transfer only fields with established results mappings.
             is_spin_polarized = model_method.is_spin_polarized
             if is_spin_polarized is not None:
                 simulation_method.spin_polarized = bool(is_spin_polarized)
@@ -516,21 +503,21 @@ class ResultsNormalizerBase:
                     )
 
         if method_tokens:
-            # NOTE(migration): results.method.method_name is currently a single
-            # enum value in nomad-FAIR results schema. For data-schema multi-method
+            # results.method.method_name is currently a single
+            # enum value in the results schema. For multi-method simulation
             # inputs, we intentionally use the first supported model_method as
             # the canonical method_name for backward-compatible search behavior.
             # The full multi-method design is deferred to results/search redesign.
             method.method_name = method_tokens[0]
             if len(method_tokens) > 1:
                 self.logger.warning(
-                    'multiple data-schema model_method sections present; using first '
+                    'multiple model_method sections present; using first '
                     'supported method_name for results compatibility',
                     chosen_method=method_tokens[0],
                     available_methods=method_tokens,
                 )
 
-        # Legacy-equivalent behavior for excited-state methods: when a DFT method
+        # For excited-state methods, when a DFT method
         # is present in the same entry, carry over starting-point metadata.
         if simulation.gw is not None:
             _map_excited_state_starting_point(simulation.gw, simulation.dft)
@@ -551,9 +538,7 @@ class ResultsNormalizerBase:
     @staticmethod
     def _mark_generated_compatibility_section(section):
         """Mark a generated section without changing user-facing quantities."""
-        section.m_annotations[DATA_SCHEMA_COMPATIBILITY_ANNOTATION] = {
-            'generated': True
-        }
+        section.m_annotations[GENERATED_RESULTS_ANNOTATION] = {'generated': True}
         return section
 
     @staticmethod
@@ -687,10 +672,10 @@ class ResultsNormalizerBase:
                 counts=present_counts,
             )
 
-    def _normalize_outputs_with_data_schema(self, archive: EntryArchive) -> None:
-        """Map nomad-simulations outputs into results.properties."""
+    def _normalize_outputs_from_simulation(self, archive: EntryArchive) -> None:
+        """Map simulation outputs into results.properties."""
 
-        def _is_valid_legacy_dos_entry(entry) -> bool:
+        def _is_valid_dos_entry(entry) -> bool:
             if entry is None:
                 return False
             if isinstance(entry, dict):
@@ -733,7 +718,7 @@ class ResultsNormalizerBase:
                 existing_dos = electronic_existing.dos_electronic or []
                 if existing_dos:
                     electronic_existing.dos_electronic = [
-                        dos for dos in existing_dos if _is_valid_legacy_dos_entry(dos)
+                        dos for dos in existing_dos if _is_valid_dos_entry(dos)
                     ]
 
         self._remove_generated_compatibility_results(properties)
@@ -752,10 +737,10 @@ class ResultsNormalizerBase:
         if not outputs:
             return
 
-        # Deliberately skip data-schema properties whose current results fields
-        # require references into legacy run/calculation sections. Those should
-        # come from legacy parsers until results can visualize them directly
-        # from archive.data:
+        # Deliberately skip properties whose current results fields require
+        # references into run/calculation sections. Other normalizers can
+        # populate them until results can visualize them directly from
+        # archive.data:
         # - Outputs.electronic_dos -> properties.electronic.dos_electronic
         # - Outputs.electronic_band_structures
         #   -> properties.electronic.band_structure_electronic
@@ -904,7 +889,7 @@ class ResultsNormalizerBase:
         selected_groups: list[dict[str, Any]] = []
         if electronic_groups:
             # Outputs describing different systems must not be combined. Different
-            # methods on the same system are a different matter: legacy
+            # methods on the same system are a different matter: the existing
             # `get_gw_workflow_properties` publishes DFT and GW results side by
             # side, so keep one labelled section per method instead of one overall.
             def _system_key(group: dict[str, Any]) -> int | None:
@@ -1131,8 +1116,8 @@ class ResultsNormalizerBase:
                 geo_opt = GeometryOptimization()
 
                 # KNOWN LIMITATION:
-                # Trajectory visualization unavailable for new schema workflows.
-                # Both trajectory and system_optimized expect legacy runschema types:
+                # Trajectory visualization is unavailable for these workflows.
+                # Both fields expect runschema types:
                 # - trajectory: runschema.calculation.Calculation
                 #   (not nomad-simulations Outputs)
                 # - system_optimized: runschema.system.System
@@ -1140,13 +1125,13 @@ class ResultsNormalizerBase:
                 #
                 # Assigning nomad-simulations sections to these fields raises
                 # TypeError.
-                # Migration policy decision: Skip compatibility population
+                # Current policy: Skip compatibility population
                 # cleanly rather than
                 # mixing schema types or creating complex translation layers.
                 #
                 # Impact: GUI geometry optimization trajectory graph
-                # (energy vs steps) will show "no data" for new schema
-                # workflows. Only convergence values are populated.
+                # (energy vs steps) will show "no data" for these workflows.
+                # Only convergence values are populated.
                 #
                 # Resolution: GUI must be updated to read from
                 # archive.data.outputs directly.
@@ -1154,7 +1139,7 @@ class ResultsNormalizerBase:
 
                 if results:
                     results_quantities = results.m_def.all_quantities
-                    # Legacy workflow schemas expose calculation references
+                    # Some workflow results expose calculation references.
                     if (
                         'calculations_ref' in results_quantities
                         and results.calculations_ref

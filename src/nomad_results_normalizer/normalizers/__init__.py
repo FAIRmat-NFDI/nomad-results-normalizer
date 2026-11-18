@@ -2,10 +2,10 @@ from nomad.config.models.plugins import NormalizerEntryPoint
 
 
 class ResultsNormalizerEntryPoint(NormalizerEntryPoint):
-    """Entry point for the Results normalizer with v2 data schema support.
+    """Entry point for normalizing simulation data into results.
 
-    This normalizer augments data-schema archives with results derived from
-    nomad-simulations data.
+    This normalizer populates results from supported simulation data in
+    ``archive.data``.
     """
 
     level: int = 3
@@ -48,7 +48,7 @@ class ResultsNormalizerEntryPoint(NormalizerEntryPoint):
                 if not k.startswith(
                     '__'
                 )  # Skip only dunder methods, keep private methods
-            },  # Copy all methods including private ones (_is_v2_data_schema, etc.)
+            },  # Copy all methods, including private implementation helpers.
         )
 
         return ResultsNormalizer()
@@ -56,7 +56,5 @@ class ResultsNormalizerEntryPoint(NormalizerEntryPoint):
 
 results_normalizer_plugin = ResultsNormalizerEntryPoint(
     name='Results',
-    description=(
-        'Results normalizer that adds nomad-simulations data-schema support.'
-    ),
+    description='Results normalizer for simulation data in archive.data.',
 )

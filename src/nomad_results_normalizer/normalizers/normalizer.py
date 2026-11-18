@@ -20,7 +20,7 @@
 # limitations under the License.
 #
 
-from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
+from nomad.datamodel.metainfo.basesections.v2 import System as BaseSystem
 
 
 class Normalizer:
@@ -36,10 +36,10 @@ class Normalizer:
     to avoid circular import issues. See ResultsNormalizerBase for details.
     """
 
-    def _representative_system(self, archive) -> 'SystemV2 | None':
+    def _representative_system(self, archive) -> 'BaseSystem | None':
         """Select a representative system for this entry.
 
-        For v2 schema (archive.data with model_system):
+        For simulation data with a model_system collection:
         - Uses archive.data.representative_system_index if available
         - Falls back to the last model_system if index is -1 or not set
         - Returns the system marked as is_representative if found

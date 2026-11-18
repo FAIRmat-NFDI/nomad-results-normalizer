@@ -45,7 +45,7 @@ def _make_bulk_model_system() -> ModelSystem:
     return system
 
 
-def _add_complete_v2_symmetry(system: ModelSystem) -> None:
+def _add_complete_model_system_symmetry(system: ModelSystem) -> None:
     """Populate the normalized symmetry inputs produced by nomad-simulations."""
     system.symmetry = GlobalCrystalSymmetry(
         hall_number=458,
@@ -80,7 +80,7 @@ def _add_complete_v2_symmetry(system: ModelSystem) -> None:
 
 
 def test_topology_calculation():
-    """Test topology_calculation with minimal new schema data."""
+    """Test topology_calculation with minimal simulation data."""
 
     archive = EntryArchive(metadata=EntryMetadata())
 
@@ -125,7 +125,7 @@ def test_topology_calculation_with_subsystem():
     root.particle_states.append(AtomsState(chemical_symbol='H', atomic_number=1))
     root.particle_states.append(AtomsState(chemical_symbol='H', atomic_number=1))
 
-    # Add cell properties directly to ModelSystem (v2 schema)
+    # Add cell properties directly to ModelSystem.
     root.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
     root.periodic_boundary_conditions = [True, True, True]
 
@@ -548,7 +548,7 @@ def test_topology_calculation_nested_subsystems():
             AtomsState(chemical_symbol=symbol, atomic_number=atomic_num)
         )
 
-    # Add cell properties directly to ModelSystem (v2 schema)
+    # Add cell properties directly to ModelSystem.
     root.lattice_vectors = np.eye(3) * 10.0 * ureg.angstrom
     root.periodic_boundary_conditions = [True, True, True]
 
@@ -970,7 +970,7 @@ def test_topology_calculation_cgbead_system():
     assert cg_mol.atomic_fraction is not None
     assert abs(cg_mol.atomic_fraction - expected_atomic_fraction) < diff_threshold
 
-    # Check if mass_fraction is populated from upstream v2 normalizers
+    # Check if mass_fraction is populated by upstream normalizers.
     # Total mass: 100 + 150 + 250 = 500 amu
     # Subsystem mass: 100 + 150 = 250 amu
     # Expected mass_fraction: 250 / 500 = 0.5
@@ -992,7 +992,7 @@ def test_normalizer():
     assert entry_archive.workflow2.name == 'test'
 
 
-def test_topology_bulk_prefers_v2_symmetry_no_matid_recompute(monkeypatch):
+def test_topology_bulk_prefers_model_system_symmetry_no_matid_recompute(monkeypatch):
     normalizer = TopologyNormalizer()
     normalizer.logger = LOGGER
     normalizer.masses = None
@@ -1030,7 +1030,7 @@ def test_topology_bulk_prefers_v2_symmetry_no_matid_recompute(monkeypatch):
         n_atoms=len(normalizer.repr_system.particle_states),
     )
     add_system(original, topology)
-    material = Material(material_id='v2-material-id')
+    material = Material(material_id='model-system-material-id')
 
     normalizer._topology_bulk(original, topology, material)
 
@@ -1039,7 +1039,7 @@ def test_topology_bulk_prefers_v2_symmetry_no_matid_recompute(monkeypatch):
     )
     assert conv_system.symmetry.space_group_number == 225
     assert conv_system.symmetry.space_group_symbol == 'Fm-3m'
-    assert conv_system.material_id == 'v2-material-id'
+    assert conv_system.material_id == 'model-system-material-id'
 
 
 def test_topology_bulk_uses_matid_for_material_id_fallback(monkeypatch):
@@ -1092,11 +1092,11 @@ def test_topology_bulk_uses_matid_for_material_id_fallback(monkeypatch):
     assert conv_system.material_id is not None
 
 
-def test_topology_consumes_complete_v2_bulk_symmetry_without_matid(monkeypatch):
+def test_topology_consumes_complete_model_system_symmetry_without_matid(monkeypatch):
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results(material=Material(structural_type='bulk'))
     system = _make_bulk_model_system()
-    _add_complete_v2_symmetry(system)
+    _add_complete_model_system_symmetry(system)
     simulation = Simulation()
     simulation.model_system.append(system)
     archive.data = simulation
@@ -1109,12 +1109,12 @@ def test_topology_consumes_complete_v2_bulk_symmetry_without_matid(monkeypatch):
     monkeypatch.setattr(normalizer, 'topology_calculation', lambda: None)
 
     def fail_matid(_):
-        raise AssertionError('complete v2 symmetry must not invoke MatID fallback')
+        raise AssertionError('complete model symmetry must not invoke MatID fallback')
 
     monkeypatch.setattr(normalizer, 'topology_matid', fail_matid)
     monkeypatch.setattr(normalizer, 'topology_data', lambda *_: ['topology-data'])
 
-    result = normalizer.topology(archive.results.material, system_v2=system)
+    result = normalizer.topology(archive.results.material, source_system=system)
 
     assert [section.label for section in result] == [
         'original',
@@ -1127,11 +1127,11 @@ def test_topology_consumes_complete_v2_bulk_symmetry_without_matid(monkeypatch):
     assert result[-1].cell.atomic_density is not None
 
 
-def test_data_schema_topology_replaces_existing_legacy_topology(monkeypatch):
+def test_computed_topology_replaces_existing_topology(monkeypatch):
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results(material=Material())
     archive.results.material.topology.append(
-        System(label='legacy', system_relation=Relation(type='root'))
+        System(label='existing', system_relation=Relation(type='root'))
     )
     archive.data = Simulation(model_system=[_make_bulk_model_system()])
 
@@ -1139,7 +1139,7 @@ def test_data_schema_topology_replaces_existing_legacy_topology(monkeypatch):
         atoms = NOMADAtoms(labels=['Si'])
         return [
             System(
-                label='data-schema',
+                label='computed',
                 system_relation=Relation(type='root'),
                 atoms=atoms,
             )
@@ -1152,23 +1152,23 @@ def test_data_schema_topology_replaces_existing_legacy_topology(monkeypatch):
     TopologyNormalizer().normalize(archive, LOGGER)
 
     assert [system.label for system in archive.results.material.topology] == [
-        'data-schema'
+        'computed'
     ]
 
 
-def test_data_schema_topology_without_atoms_restores_existing_legacy_topology(
+def test_computed_topology_without_atoms_restores_existing_topology(
     monkeypatch,
     caplog,
 ):
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results(material=Material())
     archive.results.material.topology.append(
-        System(label='legacy', system_relation=Relation(type='root'))
+        System(label='existing', system_relation=Relation(type='root'))
     )
     archive.data = Simulation(model_system=[_make_bulk_model_system()])
 
     def topology_calculation(_self):
-        return [System(label='data-schema', system_relation=Relation(type='root'))]
+        return [System(label='computed', system_relation=Relation(type='root'))]
 
     monkeypatch.setattr(
         TopologyNormalizer, 'topology_calculation', topology_calculation
@@ -1177,26 +1177,30 @@ def test_data_schema_topology_without_atoms_restores_existing_legacy_topology(
 
     TopologyNormalizer().normalize(archive, LOGGER)
 
-    assert [system.label for system in archive.results.material.topology] == ['legacy']
+    assert [system.label for system in archive.results.material.topology] == [
+        'existing'
+    ]
     assert any(
-        'Data-schema topology does not contain atoms or atoms_ref' in record.message
+        'Simulation topology does not contain atoms or atoms_ref' in record.message
         for record in caplog.records
     )
 
 
-def test_data_schema_topology_restores_existing_legacy_topology_when_empty(
+def test_empty_topology_restores_existing_topology(
     monkeypatch,
 ):
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results(material=Material())
     archive.results.material.topology.append(
-        System(label='legacy', system_relation=Relation(type='root'))
+        System(label='existing', system_relation=Relation(type='root'))
     )
     archive.data = Simulation(model_system=[_make_bulk_model_system()])
 
     monkeypatch.setattr(TopologyNormalizer, 'topology_calculation', lambda _self: None)
     monkeypatch.setattr(
-        TopologyNormalizer, 'topology_v2_symmetry', lambda _self, _material: None
+        TopologyNormalizer,
+        'topology_model_system_symmetry',
+        lambda _self, _material: None,
     )
     monkeypatch.setattr(
         TopologyNormalizer, 'topology_matid', lambda _self, _material: None
@@ -1204,7 +1208,9 @@ def test_data_schema_topology_restores_existing_legacy_topology_when_empty(
 
     TopologyNormalizer().normalize(archive, LOGGER)
 
-    assert [system.label for system in archive.results.material.topology] == ['legacy']
+    assert [system.label for system in archive.results.material.topology] == [
+        'existing'
+    ]
 
 
 def test_topology_reuses_nomad_simulations_bulk_analysis(monkeypatch):
@@ -1244,7 +1250,7 @@ def test_topology_reuses_nomad_simulations_bulk_analysis(monkeypatch):
 
 
 def test_conventional_cell_publishes_viewer_geometry(monkeypatch):
-    """The structure viewer needs `atoms`; v2 representations carry no positions."""
+    """The structure viewer needs `atoms`; representations carry no positions."""
     archive = EntryArchive(metadata=EntryMetadata(), results=Results())
     system = _make_bulk_model_system()
     archive.data = Simulation(model_system=[system])
@@ -1270,7 +1276,7 @@ def test_conventional_cell_publishes_viewer_geometry(monkeypatch):
 
     assert conventional.atoms is not None
     assert len(conventional.atoms.labels) == len(expected_atoms)
-    # n_atoms comes from the v2 Wyckoff multiplicities; it must agree with geometry.
+    # n_atoms comes from Wyckoff multiplicities; it must agree with geometry.
     assert conventional.n_atoms == len(expected_atoms)
     assert conventional.cell.atomic_density is not None
 
@@ -1299,11 +1305,11 @@ def test_conventional_cell_falls_back_when_viewer_geometry_is_unavailable(monkey
     assert conventional.symmetry.space_group_number is not None
 
 
-def test_complete_v2_bulk_symmetry_gets_material_id():
+def test_complete_model_system_bulk_symmetry_gets_material_id():
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results(material=Material(structural_type='bulk'))
     system = _make_bulk_model_system()
-    _add_complete_v2_symmetry(system)
+    _add_complete_model_system_symmetry(system)
     archive.data = Simulation(model_system=[system])
 
     TopologyNormalizer().normalize(archive, LOGGER)
@@ -1311,7 +1317,7 @@ def test_complete_v2_bulk_symmetry_gets_material_id():
     assert archive.results.material.material_id is not None
 
 
-def test_topology_runs_matid_for_bulk_with_incomplete_v2_symmetry(monkeypatch):
+def test_topology_runs_matid_for_bulk_with_incomplete_model_symmetry(monkeypatch):
     archive = EntryArchive(metadata=EntryMetadata())
     archive.results = Results(material=Material(structural_type='bulk'))
     system = _make_bulk_model_system()
@@ -1343,7 +1349,7 @@ def test_topology_runs_matid_for_bulk_with_incomplete_v2_symmetry(monkeypatch):
     monkeypatch.setattr(normalizer, 'topology_matid', run_matid)
     monkeypatch.setattr(normalizer, 'topology_data', lambda *_: ['topology-data'])
 
-    result = normalizer.topology(archive.results.material, system_v2=system)
+    result = normalizer.topology(archive.results.material, source_system=system)
 
     assert called['value'] is True
     assert result == ['topology-matid']

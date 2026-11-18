@@ -6,7 +6,7 @@ This `nomad` plugin was generated with `Cookiecutter` along with `@nomad`'s [`co
 
 ## Current visualization support
 
-For entries parsed with the `nomad-simulations` data schema, this plugin only
+For simulation entries with data in `archive.data`, this plugin only
 populates results fields that are functional in the current NOMAD GUI or are
 needed for indexing/search. The currently supported visualization paths are:
 
@@ -21,16 +21,15 @@ needed for indexing/search. The currently supported visualization paths are:
 - Geometry optimization convergence values from
   `results.properties.geometry_optimization`.
 
-The plugin deliberately does not map data-schema DOS, band structures, or
-Green's functions into legacy results fields. Those current GUI visualizations
-expect references into legacy `run/calculation` sections; legacy parsers should
-continue to provide them until the GUI can visualize these properties directly
-from `archive.data`.
+The plugin deliberately does not map DOS, band structures, or Green's functions
+from `archive.data` into results fields that require `run/calculation`
+references. Other normalizers can continue to populate those fields until the
+GUI can visualize these properties directly from `archive.data`.
 
 Direct electronic band gaps are still populated in
 `results.properties.electronic.band_gap` for results/index access, but the
 current entry-page electronic visualization primarily displays band gaps through
-legacy band-structure result sections.
+band-structure result sections.
 
 ## Development
 

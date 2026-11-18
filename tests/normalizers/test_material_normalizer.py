@@ -1,4 +1,4 @@
-"""Tests for MaterialNormalizer v2 functionality."""
+"""Tests for material results populated from simulation data."""
 
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -24,11 +24,11 @@ def create_test_system(
     lattice_vectors: list[list[float]] = [[5.43, 0, 0], [0, 5.43, 0], [0, 0, 5.43]],
     pbc: list[bool] = [True, True, True],
 ) -> ModelSystem:
-    """Create a test ModelSystem with v2 schema."""
+    """Create a test ModelSystem."""
     system = ModelSystem(is_representative=True)
     system.positions = np.array(positions) * ureg.angstrom
 
-    # Set cell properties directly on ModelSystem (v2 schema)
+    # Set cell properties directly on ModelSystem.
     system.lattice_vectors = np.array(lattice_vectors) * ureg.angstrom
     system.periodic_boundary_conditions = pbc
 
@@ -41,12 +41,11 @@ def create_test_system(
 
 
 class TestMaterialNormalizer:
-    """Test MaterialNormalizer with v2 schema data."""
+    """Test MaterialNormalizer with simulation data."""
 
     def test_chemical_formula_extraction(self):
-        """Test that MaterialNormalizer extracts chemical_formula.hill from v2
-        system."""
-        # Create archive with v2 system
+        """Test that MaterialNormalizer extracts chemical_formula.hill."""
+        # Create archive with a model system.
         archive = EntryArchive(metadata=EntryMetadata())
         archive.results = Results()
         archive.results.material = Material()
@@ -194,7 +193,7 @@ class TestMaterialNormalizer:
 
         # Check if system type reflects 2D nature
         # (actual dimensionality computation happens in topology normalizer)
-        # In v2 schema, periodic_boundary_conditions is directly on ModelSystem
+        # Periodic boundary conditions are directly on ModelSystem.
         np.testing.assert_array_equal(
             system.periodic_boundary_conditions, [True, True, False]
         )
@@ -281,7 +280,7 @@ class TestMaterialNormalizer:
         )
 
     def test_symmetry_prefers_model_system_over_legacy(self):
-        """v2 ModelSystem symmetry should take precedence over legacy values."""
+        """ModelSystem symmetry should take precedence over existing results."""
         archive = EntryArchive(metadata=EntryMetadata())
         repr_system = SimpleNamespace(
             symmetry=SimpleNamespace(
@@ -323,8 +322,8 @@ class TestMaterialNormalizer:
         assert symmetry.space_group_symbol == 'Fm-3m'
         assert symmetry.hall_number == 523
 
-    def test_symmetry_falls_back_to_legacy_when_v2_incomplete(self):
-        """Legacy repr_symmetry should fill missing core v2 symmetry data."""
+    def test_symmetry_falls_back_to_results_when_model_system_incomplete(self):
+        """Existing results symmetry should fill missing ModelSystem data."""
         archive = EntryArchive(metadata=EntryMetadata())
         repr_system = SimpleNamespace(
             symmetry=SimpleNamespace(

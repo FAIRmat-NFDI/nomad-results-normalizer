@@ -34,8 +34,8 @@ from nomad_results_normalizer.normalizers.common import (
 )
 from nomad_results_normalizer.normalizers.symmetry_adapter import (
     apply_symmetry_data_to_results_symmetry,
-    from_legacy_repr_symmetry,
     from_model_system,
+    from_results_structure_symmetry,
     is_symmetry_data_minimally_complete,
     wyckoff_sets_from_model_system,
 )
@@ -167,7 +167,7 @@ class MaterialNormalizer:
 
         if self.repr_system:
             try:
-                # Get Hill formula from v2 schema
+                # Prefer the formula supplied by the model system.
                 hill_formula = None
                 labels = None
                 chemical_formula = getattr(self.repr_system, 'chemical_formula', None)
@@ -260,9 +260,9 @@ class MaterialNormalizer:
             # Reuse the crystallographic analysis already performed by
             # nomad-simulations. MatID remains the topology fallback only when
             # these material-id inputs are absent or inconsistent.
-            v2_symmetry_data = from_model_system(self.repr_system)
+            model_symmetry_data = from_model_system(self.repr_system)
             if self.spg_number is None:
-                self.spg_number = v2_symmetry_data.get('space_group_number')
+                self.spg_number = model_symmetry_data.get('space_group_number')
             if self.wyckoff_sets is None:
                 self.wyckoff_sets = wyckoff_sets_from_model_system(self.repr_system)
             if self.spg_number is not None and self.wyckoff_sets is not None:
@@ -508,13 +508,13 @@ class MaterialNormalizer:
         result = Symmetry()
         filled = False
 
-        # Prefer symmetry directly provided by v2 ModelSystem. If core
-        # identifiers are incomplete, fill missing values from legacy
+        # Prefer symmetry directly provided by ModelSystem. If core
+        # identifiers are incomplete, fill missing values from existing
         # representative symmetry (typically MatID-backed in migrated flows).
         symmetry_data = from_model_system(self.repr_system)
         if not is_symmetry_data_minimally_complete(symmetry_data):
             symmetry_data = self._merge_missing_symmetry_data(
-                symmetry_data, from_legacy_repr_symmetry(self.repr_symmetry)
+                symmetry_data, from_results_structure_symmetry(self.repr_symmetry)
             )
 
         apply_symmetry_data_to_results_symmetry(result, symmetry_data)

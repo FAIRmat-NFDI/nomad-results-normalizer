@@ -1,10 +1,9 @@
 """
-Topology Normalizer for v2 Data Schema
+Topology Normalizer for Simulation Data
 =======================================
 
-This module provides topology normalization for entries using v2 data schema
-(archive.data with basesections.v2.System). It is called by ResultsNormalizer
-after schema version detection.
+This module populates results topology from systems in ``archive.data``.
+It is called by ResultsNormalizer after simulation data detection.
 
 Topology Creation Strategy (Waterfall)
 ---------------------------------------
@@ -12,15 +11,15 @@ Topology Creation Strategy (Waterfall)
 1. **topology_calculation()** - Extract from parser-defined sub_systems
    └─ Uses data.model_system[].sub_systems if available
 
-2. **topology_v2_symmetry()** - Consume analyzed v2 symmetry/representations
+2. **topology_model_system_symmetry()** - Consume analyzed symmetry/representations
 
 3. **topology_matid()** - Algorithmic fallback using MatID
    └─ Symmetry analysis and clustering for automatic topology detection
 
-4. **topology_data()** - Fallback for SystemV2 entries
-   └─ Direct conversion from SystemV2 structure
+4. **topology_data()** - Fallback for system sections in archive.data
+   └─ Direct conversion from the source system
 
-Note: Schema version detection and routing logic is in ResultsNormalizer.
+Note: Simulation data detection and routing logic is in ResultsNormalizer.
 See results.py for the complete normalization cascade architecture.
 """
 
@@ -49,8 +48,8 @@ from nomad.config import config
 
 # Conditional import of EntryArchive only works within entire NOMAD
 from nomad.datamodel.datamodel import EntryArchive
-from nomad.datamodel.metainfo.basesections.v2 import SubSystem as SubSystemV2
-from nomad.datamodel.metainfo.basesections.v2 import System as SystemV2
+from nomad.datamodel.metainfo.basesections.v2 import SubSystem as BaseSubSystem
+from nomad.datamodel.metainfo.basesections.v2 import System as BaseSystem
 from nomad.datamodel.results import (
     CoreHole,
     Material,
@@ -81,8 +80,8 @@ from nomad_results_normalizer.normalizers.normalizer import Normalizer
 from nomad_results_normalizer.normalizers.symmetry_adapter import (
     apply_symmetry_data_to_results_symmetry,
     find_model_system_representation,
-    from_legacy_repr_symmetry,
     from_model_system,
+    from_results_structure_symmetry,
     has_complete_model_system_symmetry,
     is_symmetry_data_minimally_complete,
     wyckoff_sets_from_model_system,
@@ -111,23 +110,20 @@ def get_topology_id(index: int) -> str:
 
 def copy_properties_to_system(
     target_system: System,
-    v2_properties,
+    source_properties,
 ) -> None:
-    """Copy atomic_fraction, mass_fraction, and elemental_composition from v2
-    schema properties (system_properties or subsystem_properties) to a
-    System object.
+    """Copy composition and fraction properties to a results topology system.
 
     Args:
         target_system: The topology to populate
-        v2_properties: The v2 schema properties object (system_properties or
-            subsystem_properties)
+        source_properties: Source system_properties or subsystem_properties
     """
-    if not v2_properties:
+    if not source_properties:
         return
 
-    af = getattr(v2_properties, 'atomic_fraction', None)
-    mf = getattr(v2_properties, 'mass_fraction', None)
-    ec = getattr(v2_properties, 'elemental_composition', None)
+    af = getattr(source_properties, 'atomic_fraction', None)
+    mf = getattr(source_properties, 'mass_fraction', None)
+    ec = getattr(source_properties, 'elemental_composition', None)
 
     if af is not None:
         target_system.atomic_fraction = af
@@ -142,7 +138,7 @@ def get_topology_original(
 ) -> System:
     """Creates a new topology item for the original structure.
 
-    For v2 schema, tries to get dimensionality from archive.results.material.
+    Uses archive.results.material for dimensionality when available.
     """
     dimensionality = None
     n_particles = len(particles) if particles else None
@@ -168,17 +164,17 @@ def get_topology_original(
     return original
 
 
-def add_system_info_2(  # noqa: PLR0912
+def populate_topology_system_info(  # noqa: PLR0912
     system: System,
     topologies: dict[str, System],
-    parent_system: 'System | None' = None,
+    source_system: BaseSystem | None = None,
 ) -> None:
-    """V2 schema version that populates system info from particle_indices.
+    """Populate geometry and composition from source particle states and indices.
 
     Args:
         system: The topology system to populate
         topologies: Dict of all topology systems
-        parent_system: The parent System with positions and particle_states
+        source_system: The source system with positions and particle_states
     """
 
     def _normalize_atomic_number(number, symbol=None) -> int | None:
@@ -329,18 +325,18 @@ def add_system_info_2(  # noqa: PLR0912
         return atoms
 
     # Root/original node: derive atoms/cell directly from representative
-    # v2 ModelSystem. Keep indices unset because downstream GUI logic uses
+    # ModelSystem. Keep indices unset because downstream GUI logic uses
     # "no indices" to identify roots.
     relation = system.system_relation.type if system.system_relation else None
-    if relation == 'root' and parent_system is not None:
+    if relation == 'root' and source_system is not None:
         try:
-            particle_states = parent_system.particle_states
+            particle_states = source_system.particle_states
             if system.n_atoms is None and particle_states:
                 system.n_atoms = len(particle_states)
 
             ase_atoms = None
             try:
-                ase_atoms = parent_system.to_ase_atoms()
+                ase_atoms = source_system.to_ase_atoms()
             except Exception:
                 ase_atoms = None
 
@@ -352,13 +348,13 @@ def add_system_info_2(  # noqa: PLR0912
                 if system.cell is None:
                     system.cell = cell_from_ase_atoms(ase_atoms)
             elif system.atoms is None:
-                # Fallback for inconsistent v2 geometry payloads where
+                # Fallback for inconsistent source geometry where
                 # ASE conversion fails.
-                system.atoms = _nomad_atoms_from_model_system(parent_system)
+                system.atoms = _nomad_atoms_from_model_system(source_system)
 
             symbols = _particle_symbols(particle_states)
-            if parent_system.positions is not None and len(symbols) != len(
-                parent_system.positions
+            if source_system.positions is not None and len(symbols) != len(
+                source_system.positions
             ):
                 symbols = []
             _populate_chemistry(system, symbols)
@@ -380,13 +376,13 @@ def add_system_info_2(  # noqa: PLR0912
         if parent and parent.n_atoms:
             system.atomic_fraction = system.n_atoms / parent.n_atoms
 
-    # Populate parent system with system info
-    if not parent_system:
+    # Source particle states are needed for subsystem chemistry.
+    if not source_system:
         return
 
     try:
-        particle_states = parent_system.particle_states
-        positions = parent_system.positions
+        particle_states = source_system.particle_states
+        positions = source_system.positions
 
         if not particle_states or len(particle_states) == 0:
             return
@@ -440,7 +436,7 @@ class TopologyNormalizer(Normalizer):
         symmetry_data = from_model_system(self.repr_system)
         if not is_symmetry_data_minimally_complete(symmetry_data):
             symmetry_data = self._merge_missing_symmetry_data(
-                symmetry_data, from_legacy_repr_symmetry(self.repr_symmetry)
+                symmetry_data, from_results_structure_symmetry(self.repr_symmetry)
             )
         return symmetry_data
 
@@ -453,12 +449,9 @@ class TopologyNormalizer(Normalizer):
         return result
 
     def _initialize_representative_system(
-        self, archive: 'EntryArchive', system_v2=None
+        self, archive: EntryArchive, source_system: BaseSystem | None = None
     ) -> None:
-        """Initialize repr_system, repr_symmetry, and conv_atoms.
-
-        Uses v2 data schema (SystemV2/Simulation) only.
-        """
+        """Initialize the representative system and available symmetry data."""
         self.repr_system = None
         self.repr_symmetry = None
         self.conv_atoms = None
@@ -467,8 +460,8 @@ class TopologyNormalizer(Normalizer):
 
         # Get representative system from data
         self.repr_system = self._representative_system(archive)
-        if self.repr_system is None and system_v2 is not None:
-            self.repr_system = system_v2
+        if self.repr_system is None and source_system is not None:
+            self.repr_system = source_system
 
         # Get symmetry from results if available
         self._get_symmetry_from_results(archive)
@@ -484,30 +477,28 @@ class TopologyNormalizer(Normalizer):
             pass
 
     def normalize(
-        self, archive: 'EntryArchive', logger: 'BoundLogger', system_v2=None
+        self,
+        archive: EntryArchive,
+        logger: BoundLogger,
+        source_system: BaseSystem | None = None,
     ) -> None:
-        """
-        Main normalization entry point for v2 data schema.
-
-        Called by ResultsNormalizer after schema version detection.
-        This only handles v2 data schema (archive.data).
-        """
+        """Populate results topology from supported systems in archive.data."""
         self.entry_archive = archive
         self.logger = logger
 
         # Initialize representative system and related attributes
-        self._initialize_representative_system(archive, system_v2)
+        self._initialize_representative_system(archive, source_system)
 
         if self.entry_archive.results.material is None:
             self.entry_archive.results.material = MaterialNormalizer(
                 entry_archive=self.entry_archive,
                 repr_system=self.repr_system,
                 repr_symmetry=self.repr_symmetry,
-                spg_number=None,  # unknown at this stage in v2 path
+                spg_number=None,  # unknown at this stage
                 conv_atoms=self.conv_atoms,
-                wyckoff_sets=None,  # unknown at this stage in v2 path
+                wyckoff_sets=None,  # unknown at this stage
                 properties=self.entry_archive.results.properties,
-                optimade=None,  # not used in v2 path
+                optimade=None,  # not used in this path
                 logger=logger,
             ).material(populate_topology=False)
 
@@ -516,7 +507,7 @@ class TopologyNormalizer(Normalizer):
             existing_topology = list(material.topology or [])
             material.topology = []
             try:
-                topology = self.topology(material, system_v2)
+                topology = self.topology(material, source_system)
             except Exception:
                 material.topology = existing_topology
                 raise
@@ -525,14 +516,14 @@ class TopologyNormalizer(Normalizer):
                     material.topology.extend(topology)
                 elif existing_topology:
                     self.logger.error(
-                        'Data-schema topology does not contain atoms or atoms_ref; '
-                        'restoring legacy topology for structure visualization.'
+                        'Simulation topology does not contain atoms or atoms_ref; '
+                        'restoring existing topology for structure visualization.'
                     )
                     material.topology.extend(existing_topology)
                 else:
                     self.logger.error(
-                        'Data-schema topology does not contain atoms or atoms_ref, '
-                        'and no legacy topology is available to restore.'
+                        'Simulation topology does not contain atoms or atoms_ref, '
+                        'and no existing topology is available to restore.'
                     )
                     material.topology.extend(topology)
             elif existing_topology:
@@ -546,28 +537,30 @@ class TopologyNormalizer(Normalizer):
             for system in topology
         )
 
-    def topology(self, material, system_v2=None) -> list[System] | None:
-        """Returns a dictionary that contains all of the topologies mapped by id."""
-        # First: topology from data schema calculation (v2)
+    def topology(
+        self, material: Material, source_system: BaseSystem | None = None
+    ) -> list[System] | None:
+        """Return topology from the first applicable source."""
+        # First: topology defined by the simulation parser.
         topology = self.topology_calculation()
 
         # Second: consume symmetry and conventional-cell data already normalized
         # by nomad-simulations. This avoids repeating MatID symmetry analysis.
         if topology is None:
-            topology = self.topology_v2_symmetry(material)
+            topology = self.topology_model_system_symmetry(material)
 
-        # Third: use MatID only when required v2 inputs are missing/incomplete.
+        # Third: use MatID only when required symmetry inputs are incomplete.
         if topology is None:
             with utils.timer(self.logger, 'calculating topology with matid'):
                 topology = self.topology_matid(material)
 
-        # Fourth: fallback to topology_data for SystemV2 entries
+        # Fourth: convert a source system directly.
         if topology is None:
-            if system_v2 is not None:
-                topology = self.topology_data(system_v2)
+            if source_system is not None:
+                topology = self.topology_data(source_system)
             else:
                 data = self.entry_archive.data
-                if data and isinstance(data, SystemV2):
+                if data and isinstance(data, BaseSystem):
                     topology = self.topology_data(data)
 
         return topology
@@ -579,8 +572,8 @@ class TopologyNormalizer(Normalizer):
         groups = None
         result = None
 
-        def _has_topology_payload(candidate: SystemV2 | None) -> bool:
-            if not isinstance(candidate, SystemV2):
+        def _has_topology_payload(candidate: BaseSystem | None) -> bool:
+            if not isinstance(candidate, BaseSystem):
                 return False
             try:
                 candidate_groups = candidate.sub_systems
@@ -613,7 +606,7 @@ class TopologyNormalizer(Normalizer):
         # Prefer the already resolved representative system. This keeps
         # topology/root structure payload aligned with the system selected for
         # results/material population.
-        if isinstance(self.repr_system, SystemV2):
+        if isinstance(self.repr_system, BaseSystem):
             system = self.repr_system
 
         # If representative system does not carry parser hierarchy payload
@@ -635,7 +628,7 @@ class TopologyNormalizer(Normalizer):
             system = model_systems[0]
 
         # Validate system type and extract groups
-        if system and isinstance(system, SystemV2):
+        if system and isinstance(system, BaseSystem):
             try:
                 groups = system.sub_systems
             except Exception:
@@ -722,7 +715,7 @@ class TopologyNormalizer(Normalizer):
                 # Add derived system information once all indices gathered
                 for top in topology.values():
                     top.indices = label_to_indices.get(top.label)
-                    add_system_info_2(top, topology, parent_system=system)
+                    populate_topology_system_info(top, topology, source_system=system)
                     if top.structural_type == 'active orbitals':
                         try:
                             top.active_orbitals = active_orbital_states[0]
@@ -740,10 +733,10 @@ class TopologyNormalizer(Normalizer):
     def _conventional_atoms_for_viewer(self) -> Atoms | None:
         """Conventional-cell geometry for the GUI structure viewer.
 
-        The v2 conventional `Representation` carries `lattice_vectors` but neither
+        The conventional representation carries `lattice_vectors` but neither
         positions nor per-site species, so the viewer payload cannot be built from
-        v2 data alone. This recovers geometry only - symmetry and `material_id`
-        still come from the values `nomad-simulations` already normalized and are
+        the stored representation alone. This recovers geometry only - symmetry
+        and `material_id` still come from values already normalized and are
         never recomputed here.
 
         TODO(migration): drop this once `resolve_analyzed_cell` publishes the
@@ -773,8 +766,8 @@ class TopologyNormalizer(Normalizer):
             )
             return None
 
-    def topology_v2_symmetry(self, material: Material) -> list[System] | None:
-        """Build bulk topology from existing v2 symmetry and representations."""
+    def topology_model_system_symmetry(self, material: Material) -> list[System] | None:
+        """Build bulk topology from ModelSystem symmetry and representations."""
         if getattr(self.repr_system, 'type', None) != 'bulk':
             return None
         if not has_complete_model_system_symmetry(self.repr_system):
@@ -812,7 +805,7 @@ class TopologyNormalizer(Normalizer):
         viewer_atoms = self._conventional_atoms_for_viewer()
         if viewer_atoms is not None and len(viewer_atoms) != n_conventional_atoms:
             self.logger.warning(
-                'conventional cell atom count disagrees with v2 Wyckoff multiplicities',
+                'conventional cell atom count disagrees with Wyckoff multiplicities',
                 n_wyckoff_atoms=n_conventional_atoms,
                 n_geometry_atoms=len(viewer_atoms),
             )
@@ -822,7 +815,9 @@ class TopologyNormalizer(Normalizer):
         particles = getattr(self.repr_system, 'particle_states', None)
         original = get_topology_original(particles, self.entry_archive)
         add_system(original, topology)
-        add_system_info_2(original, topology, parent_system=self.repr_system)
+        populate_topology_system_info(
+            original, topology, source_system=self.repr_system
+        )
 
         subsystem = System(
             method='parser',
@@ -834,7 +829,9 @@ class TopologyNormalizer(Normalizer):
             indices=[list(range(original.n_atoms))],
         )
         add_system(subsystem, topology, original)
-        add_system_info_2(subsystem, topology, parent_system=self.repr_system)
+        populate_topology_system_info(
+            subsystem, topology, source_system=self.repr_system
+        )
 
         conventional_system = System(
             method='parser',
@@ -855,7 +852,7 @@ class TopologyNormalizer(Normalizer):
         material.material_id = material_id
         return list(topology.values())
 
-    def topology_matid(self, material: Material) -> list[SystemV2] | None:  # noqa: PLR0912
+    def topology_matid(self, material: Material) -> list[System] | None:  # noqa: PLR0912
         """
         Returns a list of systems that have been identified with MatID.
         """
@@ -884,7 +881,7 @@ class TopologyNormalizer(Normalizer):
                 self.conv_atoms.set_pbc(True)
             except Exception as error:
                 self.logger.warning(
-                    'could not construct MatID inputs for v2 bulk system',
+                    'could not construct MatID inputs for bulk system',
                     exc_info=error,
                 )
 
@@ -894,7 +891,9 @@ class TopologyNormalizer(Normalizer):
         original = get_topology_original(particles, self.entry_archive)
         # Keep atoms_ref for compatibility with old topology_matid code
         add_system(original, topology)
-        add_system_info_2(original, topology, parent_system=self.repr_system)
+        populate_topology_system_info(
+            original, topology, source_system=self.repr_system
+        )
 
         # Since we still need to run the old classification code
         # (matid.classification.classify), we use it's results to populate the
@@ -956,14 +955,14 @@ class TopologyNormalizer(Normalizer):
                     # terms aggregation.
                     if conventional_cell.material_id in top_50k_material_ids:
                         add_system(subsystem, topology, original)
-                        add_system_info_2(
-                            subsystem, topology, parent_system=self.repr_system
+                        populate_topology_system_info(
+                            subsystem, topology, source_system=self.repr_system
                         )
                         add_system(conventional_cell, topology, subsystem)
-                        add_system_info_2(
+                        populate_topology_system_info(
                             conventional_cell,
                             topology,
-                            parent_system=self.repr_system,
+                            source_system=self.repr_system,
                         )
                     else:
                         self.logger.info(
@@ -973,7 +972,7 @@ class TopologyNormalizer(Normalizer):
 
         return list(topology.values())
 
-    def topology_data(self, section: SystemV2, path: str = '') -> list[System]:
+    def topology_data(self, section: BaseSystem, path: str = '') -> list[System]:
         topology: dict[str, System] = {}
         try:
             particles = self.repr_system.particle_states
@@ -981,24 +980,26 @@ class TopologyNormalizer(Normalizer):
             particles = None
         original = get_topology_original(particles, self.entry_archive)
         add_system(original, topology)
-        add_system_info_2(original, topology, parent_system=self.repr_system)
+        populate_topology_system_info(
+            original, topology, source_system=self.repr_system
+        )
         root_id = path or section.name or section.m_def.name
         root = System(
             method='parser',
             label=root_id,
-            description='Imported from v2.System',
+            description='Imported from archive.data system.',
         )
-        v2_props = getattr(section, 'subsystem_properties', None) or getattr(
+        source_properties = getattr(section, 'subsystem_properties', None) or getattr(
             section, 'system_properties', None
         )
-        copy_properties_to_system(root, v2_props)
+        copy_properties_to_system(root, source_properties)
         add_system(root, topology, original)
-        add_system_info_2(root, topology, parent_system=self.repr_system)
+        populate_topology_system_info(root, topology, source_system=self.repr_system)
 
-        def recurse(v2sec: SystemV2, parent_sys: System, cur_path: str):
-            for proxy in getattr(v2sec, 'sub_systems', []) or []:
+        def recurse(source_section: BaseSystem, parent_sys: System, cur_path: str):
+            for proxy in getattr(source_section, 'sub_systems', []) or []:
                 sub = getattr(proxy, 'value', proxy)
-                if not isinstance(sub, SubSystemV2):
+                if not isinstance(sub, BaseSubSystem):
                     continue
 
                 child_name = getattr(sub, 'name', None)
@@ -1006,13 +1007,15 @@ class TopologyNormalizer(Normalizer):
                 child = System(
                     method='parser',
                     label=child_name or 'subsystem',
-                    description='Imported from v2.System',
+                    description='Imported from archive.data system.',
                 )
 
                 sub_props = getattr(sub, 'subsystem_properties', None)
                 copy_properties_to_system(child, sub_props)
                 add_system(child, topology, parent_sys)
-                add_system_info_2(child, topology, parent_system=self.repr_system)
+                populate_topology_system_info(
+                    child, topology, source_system=self.repr_system
+                )
 
                 recurse(sub, child, child_id)
 
@@ -1039,7 +1042,9 @@ class TopologyNormalizer(Normalizer):
             indices=[list(range(original.n_atoms))],
         )
         add_system(subsystem, topology, original)
-        add_system_info_2(subsystem, topology, parent_system=self.repr_system)
+        populate_topology_system_info(
+            subsystem, topology, source_system=self.repr_system
+        )
 
         # Conventional system
         conv_system = System(
@@ -1077,7 +1082,9 @@ class TopologyNormalizer(Normalizer):
             if material is not None:
                 material.material_id = conv_system.material_id
         add_system(conv_system, topology, subsystem)
-        add_system_info_2(conv_system, topology, parent_system=self.repr_system)
+        populate_topology_system_info(
+            conv_system, topology, source_system=self.repr_system
+        )
 
     def _topology_1d(self, original, topology):
         """Creates a topology for 1D structures as detected by the old matid
@@ -1096,7 +1103,9 @@ class TopologyNormalizer(Normalizer):
             indices=[list(range(original.n_atoms))],
         )
         add_system(subsystem, topology, original)
-        add_system_info_2(subsystem, topology, parent_system=self.repr_system)
+        populate_topology_system_info(
+            subsystem, topology, source_system=self.repr_system
+        )
 
         # Conventional system
         conv_system = System(
@@ -1125,7 +1134,9 @@ class TopologyNormalizer(Normalizer):
 
         conv_system.material_id = material_id_1d(self.conv_atoms)
         add_system(conv_system, topology, subsystem)
-        add_system_info_2(conv_system, topology, parent_system=self.repr_system)
+        populate_topology_system_info(
+            conv_system, topology, source_system=self.repr_system
+        )
 
     def _create_subsystem(self, cluster: Cluster) -> System | None:
         """
@@ -1273,7 +1284,7 @@ class TopologyNormalizer(Normalizer):
 
     def _extract_orbital(self) -> list[CoreHole]:
         """
-        Gather atomic orbitals from v2 schema:
+        Gather atomic orbitals from simulation data:
         `data.model_system[].particle_states[].core_hole`.
         """
         # Validate data structure exists
