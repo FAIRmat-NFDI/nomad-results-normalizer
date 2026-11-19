@@ -687,6 +687,116 @@ def test_topology_calculation_multiple_same_label():
     assert len(water_system.indices) == n_indices
 
 
+def _nested_molecule_topology(molecule_names, monomer_names):
+    """Convert two interleaved six-particle molecules with nested monomers."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    root = ModelSystem(
+        name='test_system',
+        type='molecule',
+        is_representative=True,
+        positions=np.column_stack((np.arange(12), np.zeros((12, 2)))) * ureg.angstrom,
+        n_particles=12,
+    )
+    for _ in range(12):
+        root.particle_states.append(AtomsState(chemical_symbol='C', atomic_number=6))
+
+    molecule_group = ModelSystem(
+        name='group_0',
+        branch_label='molecule_group',
+        particle_indices=np.arange(12, dtype=np.int32),
+    )
+    for molecule_index, molecule_name in enumerate(molecule_names):
+        indices = np.arange(molecule_index, 12, 2, dtype=np.int32)
+        molecule = ModelSystem(
+            name=molecule_name,
+            branch_label='molecule',
+            particle_indices=indices,
+        )
+        monomer_group = ModelSystem(
+            name='group_1',
+            branch_label='monomer_group',
+            particle_indices=indices,
+        )
+        for monomer_name, monomer_indices in zip(
+            monomer_names, (indices[:3], indices[3:]), strict=True
+        ):
+            monomer_group.sub_systems.append(
+                ModelSystem(
+                    name=monomer_name,
+                    branch_label='monomer',
+                    particle_indices=monomer_indices,
+                )
+            )
+        molecule.sub_systems.append(monomer_group)
+        molecule_group.sub_systems.append(molecule)
+    root.sub_systems.append(molecule_group)
+
+    simulation = Simulation()
+    simulation.model_system.append(root)
+    archive.data = simulation
+    archive.results = Results(material=Material())
+
+    normalizer = TopologyNormalizer()
+    normalizer.normalize(archive, LOGGER)
+    return normalizer.topology_calculation()
+
+
+def test_topology_calculation_nested_numeric_label_collisions():
+    """Molecule and monomer IDs may overlap without losing any hierarchy."""
+    result = _nested_molecule_topology(('0', '1'), ('1', '2'))
+
+    assert result is not None
+    assert len(result) == 10
+    molecule_group = next(system for system in result if system.label == 'group_0')
+    molecules = [
+        system for system in result if system.parent_system == molecule_group.system_id
+    ]
+    assert {molecule.label for molecule in molecules} == {'0', '1'}
+
+    for molecule_index, molecule in enumerate(molecules):
+        expected_indices = np.arange(molecule_index, 12, 2)
+        np.testing.assert_array_equal(molecule.indices[0], expected_indices)
+        monomer_groups = [
+            system for system in result if system.parent_system == molecule.system_id
+        ]
+        assert len(monomer_groups) == 1
+        monomer_group = monomer_groups[0]
+        assert monomer_group.label == 'group_1'
+        np.testing.assert_array_equal(monomer_group.indices[0], expected_indices)
+        monomers = [
+            system
+            for system in result
+            if system.parent_system == monomer_group.system_id
+        ]
+        assert {monomer.label for monomer in monomers} == {'1', '2'}
+        for monomer in monomers:
+            expected = (
+                expected_indices[:3] if monomer.label == '1' else expected_indices[3:]
+            )
+            np.testing.assert_array_equal(monomer.indices[0], expected)
+
+
+def test_topology_calculation_collects_descendants_of_repeated_molecules():
+    """Every repeated molecule contributes its monomer occurrences."""
+    result = _nested_molecule_topology(('polymer', 'polymer'), ('repeat', 'repeat'))
+
+    assert result is not None
+    assert len(result) == 5
+    polymer = next(system for system in result if system.label == 'polymer')
+    monomer_group = next(system for system in result if system.label == 'group_1')
+    monomer = next(system for system in result if system.label == 'repeat')
+    assert monomer_group.parent_system == polymer.system_id
+    assert monomer.parent_system == monomer_group.system_id
+    np.testing.assert_array_equal(
+        polymer.indices, [[0, 2, 4, 6, 8, 10], [1, 3, 5, 7, 9, 11]]
+    )
+    np.testing.assert_array_equal(monomer_group.indices, polymer.indices)
+    np.testing.assert_array_equal(
+        monomer.indices,
+        [[0, 2, 4], [6, 8, 10], [1, 3, 5], [7, 9, 11]],
+    )
+
+
 def test_topology_calculation_branch_label_types():
     """Test different branch_label types: monomer, monomer_group."""
 
@@ -861,7 +971,7 @@ def test_topology_calculation_no_particle_states():
 
 
 def test_topology_calculation_mismatched_label_atom_counts():
-    """Test same label but different atom counts - should log warning."""
+    """Same-named structures of different sizes remain separate systems."""
 
     archive = EntryArchive(metadata=EntryMetadata())
 
@@ -891,7 +1001,7 @@ def test_topology_calculation_mismatched_label_atom_counts():
         branch_label='molecule',
         particle_indices=np.array([0, 1, 2], dtype=np.int32),
     )
-    # Second molecule with 2 atoms but same label - should trigger warning
+    # Second molecule has the same label but cannot share a rectangular index array.
     mol2 = ModelSystem(
         name='fragment',
         branch_label='molecule',
@@ -910,18 +1020,13 @@ def test_topology_calculation_mismatched_label_atom_counts():
     normalizer = TopologyNormalizer()
     normalizer.normalize(archive, LOGGER)
 
-    # Should not crash, may log warning
     result = normalizer.topology_calculation()
     assert result is not None
 
-    # First instance should be stored, second should be rejected
-    systems_dict = {s.label: s for s in result}
-    assert 'fragment' in systems_dict
-    fragment_system = systems_dict['fragment']
-    # Should only have first instance (3 atoms)
-    n_groups, n_indices = 1, 3
-    assert len(fragment_system.indices) == n_groups
-    assert len(fragment_system.indices[0]) == n_indices
+    fragments = [system for system in result if system.label == 'fragment']
+    assert len(fragments) == 2
+    assert sorted(len(system.indices[0]) for system in fragments) == [2, 3]
+    assert len({system.system_id for system in fragments}) == 2
 
 
 def test_topology_calculation_cgbead_system():
