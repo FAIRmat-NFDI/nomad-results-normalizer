@@ -983,14 +983,23 @@ class TopologyNormalizer(Normalizer):
         populate_topology_system_info(
             original, topology, source_system=self.repr_system
         )
+        source_properties = getattr(section, 'subsystem_properties', None) or getattr(
+            section, 'system_properties', None
+        )
+        # The original node already represents a bare root system. A second
+        # node without indices or properties would be an empty GUI selection.
+        if (
+            section is self.repr_system
+            and not section.sub_systems
+            and not source_properties
+        ):
+            return list(topology.values())
+
         root_id = path or section.name or section.m_def.name
         root = System(
             method='parser',
             label=root_id,
             description='Imported from archive.data system.',
-        )
-        source_properties = getattr(section, 'subsystem_properties', None) or getattr(
-            section, 'system_properties', None
         )
         copy_properties_to_system(root, source_properties)
         add_system(root, topology, original)

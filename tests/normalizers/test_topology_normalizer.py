@@ -104,6 +104,30 @@ def test_topology_calculation():
     assert result is None
 
 
+def test_topology_data_does_not_add_empty_input_structure_child():
+    """A bare input system is already represented by the original node."""
+    archive = EntryArchive(metadata=EntryMetadata())
+    root = ModelSystem(
+        name='Input structure',
+        is_representative=False,
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) * ureg.angstrom,
+        n_particles=2,
+    )
+    root.particle_states.extend(
+        [CGBeadState(bead_symbol='1'), CGBeadState(bead_symbol='2')]
+    )
+    archive.data = Simulation(model_system=[root])
+    archive.results = Results(material=Material())
+
+    TopologyNormalizer().normalize(archive, LOGGER, source_system=root)
+
+    topology = archive.results.material.topology
+    assert len(topology) == 1
+    assert topology[0].label == 'original'
+    assert topology[0].n_atoms == 2
+    assert len(topology[0].atoms.positions) == 2
+
+
 def test_topology_calculation_with_subsystem():
     """Test topology_calculation with subsystems."""
 
