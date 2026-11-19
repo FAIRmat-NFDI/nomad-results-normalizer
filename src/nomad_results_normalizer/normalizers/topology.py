@@ -35,7 +35,6 @@ if TYPE_CHECKING:
 
 import json
 import pathlib
-from collections import defaultdict
 
 import numpy as np
 from ase import Atoms
@@ -643,7 +642,13 @@ class TopologyNormalizer(Normalizer):
                 topology: dict[str, System] = {}
                 original = get_topology_original(particle_states, self.entry_archive)
                 add_system(original, topology)
-                label_to_indices: dict[str, list] = defaultdict(list)
+                # A label is only meaningful within its parent and hierarchy role.
+                # Keep differently sized occurrences separate as well, since their
+                # indices cannot be rows of the same rectangular array.
+                grouped_systems: dict[
+                    tuple[str, str | None, str | None, int | None], System
+                ] = {}
+                indices_by_system: dict[str, list] = {}
 
                 # Define mapping dictionaries once to avoid recreating them
                 description_map = {
@@ -674,17 +679,20 @@ class TopologyNormalizer(Normalizer):
                     'monomer_group': 'group',
                 }
 
-                def add_group(groups, parent=None):
-                    if not groups:
-                        return None
-                    for group in groups:
-                        label = group.name
-                        # Groups with same label mapped to same system
-                        # TODO: change for active orbitals
-                        old_labels = label_to_indices[label]
+                def add_group(groups, parent):
+                    for group in groups or []:
                         instance_indices = group.particle_indices
-                        if not old_labels:
-                            system = System(
+                        group_key = (
+                            parent.system_id,
+                            group.branch_label,
+                            group.name,
+                            len(instance_indices)
+                            if instance_indices is not None
+                            else None,
+                        )
+                        grouped_system = grouped_systems.get(group_key)
+                        if grouped_system is None:
+                            grouped_system = System(
                                 method='parser',
                                 description=description_map.get(group.branch_label),
                                 label=group.name,
@@ -698,23 +706,22 @@ class TopologyNormalizer(Normalizer):
                                     type=relation_map.get(group.branch_label)
                                 ),
                             )
-                            add_system(system, topology, parent)
-                            add_group(group.sub_systems, system)
-                            old_labels.append(instance_indices)
-                        elif len(old_labels[0]) == len(instance_indices):
-                            old_labels.append(instance_indices)
-                        else:
-                            self.logger.warn(
-                                'The topology contains entries with the same label '
-                                'but with different numbers of atoms'
-                            )
+                            add_system(grouped_system, topology, parent)
+                            grouped_systems[group_key] = grouped_system
+                        if instance_indices is not None:
+                            indices_by_system.setdefault(
+                                grouped_system.system_id, []
+                            ).append(instance_indices)
+                        # Every occurrence contributes descendants, even when its
+                        # own system was already created for an earlier occurrence.
+                        add_group(group.sub_systems, grouped_system)
 
                 add_group(groups, original)
                 active_orbital_states = self._extract_orbital()
 
                 # Add derived system information once all indices gathered
                 for top in topology.values():
-                    top.indices = label_to_indices.get(top.label)
+                    top.indices = indices_by_system.get(top.system_id)
                     populate_topology_system_info(top, topology, source_system=system)
                     if top.structural_type == 'active orbitals':
                         try:
