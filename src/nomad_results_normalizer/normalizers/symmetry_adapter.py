@@ -11,7 +11,7 @@ from nomad.datamodel.results import WyckoffSet, bravais_lattices, crystal_system
 
 
 def empty_symmetry_data() -> dict[str, Any]:
-    """Create an empty legacy-equivalent symmetry data dictionary."""
+    """Create an empty symmetry data dictionary for results population."""
     return {
         'hall_number': None,
         'hall_symbol': None,
@@ -41,11 +41,11 @@ def is_symmetry_data_minimally_complete(symmetry_data: dict[str, Any]) -> bool:
 
 
 def _crystal_system_from_lattice_type(lattice_type: Any) -> str | None:
-    """Map a v2 `lattice_type` onto the legacy `crystal_system` enum.
+    """Map ModelSystem `lattice_type` onto the results `crystal_system` enum.
 
     `GlobalCrystalSymmetry` has no `crystal_system` quantity; it carries the
     crystal family in Pearson-style `'<code> - <name>'` form (e.g. `'c - cubic'`).
-    Only the seven 3D names have a legacy-equivalent target, so the 2D/1D lattice
+    Only the seven 3D names have a results target, so the 2D/1D lattice
     types (`'mp - oblique'`, `'hp - hexagonal 2D'`, ...) stay unmapped.
     """
     if not isinstance(lattice_type, str):
@@ -54,10 +54,10 @@ def _crystal_system_from_lattice_type(lattice_type: Any) -> str | None:
     return crystal_system if crystal_system in crystal_systems else None
 
 
-def _legacy_bravais_lattice(bravais_lattice: Any) -> str | None:
-    """Keep only Pearson symbols that the legacy `bravais_lattice` enum accepts.
+def _results_bravais_lattice(bravais_lattice: Any) -> str | None:
+    """Keep only Pearson symbols that the results `bravais_lattice` enum accepts.
 
-    The v2 `bravais_lattice` property also reconstructs 2D/1D symbols such as
+    The ModelSystem `bravais_lattice` property also reconstructs 2D/1D symbols such as
     `'mpp'` or `'ocp'`, which are not enum members and would raise on assignment.
     """
     if not isinstance(bravais_lattice, str):
@@ -65,8 +65,8 @@ def _legacy_bravais_lattice(bravais_lattice: Any) -> str | None:
     return bravais_lattice if bravais_lattice in bravais_lattices else None
 
 
-def from_legacy_repr_symmetry(repr_symmetry: Any) -> dict[str, Any]:
-    """Normalize legacy `repr_system.symmetry[0]` into symmetry data."""
+def from_results_structure_symmetry(repr_symmetry: Any) -> dict[str, Any]:
+    """Normalize existing results structure symmetry into symmetry data."""
     if repr_symmetry is None:
         return empty_symmetry_data()
 
@@ -95,7 +95,7 @@ def from_legacy_repr_symmetry(repr_symmetry: Any) -> dict[str, Any]:
 
 
 def from_model_system(model_system: Any) -> dict[str, Any]:
-    """Normalize v2 ModelSystem symmetry/local_symmetry into symmetry data."""
+    """Normalize ModelSystem symmetry/local_symmetry into symmetry data."""
     if model_system is None:
         return empty_symmetry_data()
 
@@ -113,7 +113,7 @@ def from_model_system(model_system: Any) -> dict[str, Any]:
     symmetry_data.update(
         hall_number=getattr(symmetry, 'hall_number', None),
         hall_symbol=getattr(symmetry, 'hall_symbol', None),
-        bravais_lattice=_legacy_bravais_lattice(
+        bravais_lattice=_results_bravais_lattice(
             getattr(symmetry, 'bravais_lattice', None)
         ),
         crystal_system=getattr(symmetry, 'crystal_system', None)
@@ -152,10 +152,10 @@ def find_model_system_representation(model_system: Any, cell_type: str) -> Any |
 
 
 def wyckoff_sets_from_model_system(model_system: Any) -> list[WyckoffSet] | None:
-    """Build legacy material-id inputs from normalized v2 local symmetry.
+    """Build material-id inputs from normalized ModelSystem local symmetry.
 
     ``site_multiplicities`` already contains the conventional-cell orbit size.
-    The returned indices are therefore count carriers for the unchanged legacy
+    The returned indices are therefore count carriers for the unchanged
     ``material_id_bulk`` hashing function; no crystallographic analysis is repeated.
     """
     if model_system is None:
@@ -221,7 +221,7 @@ def wyckoff_sets_from_model_system(model_system: Any) -> list[WyckoffSet] | None
 
 
 def has_complete_model_system_symmetry(model_system: Any) -> bool:
-    """Whether v2 carries every input needed for bulk results and material ID."""
+    """Whether ModelSystem carries all inputs for bulk results and material ID."""
     symmetry_data = from_model_system(model_system)
     conventional = find_model_system_representation(model_system, 'conventional')
     return bool(
@@ -241,7 +241,7 @@ def apply_symmetry_data_to_results_symmetry(
 
     # `results.material.symmetry` (Symmetry) and topology `System.symmetry`
     # (SymmetryNew) name the AFLOW prototype id differently, so each source field
-    # lists every legacy-equivalent target name and the first declared one wins.
+    # lists every equivalent results target name and the first declared one wins.
     # Without this the prototype id is silently dropped on topology nodes.
     field_map = {
         'hall_number': ('hall_number',),

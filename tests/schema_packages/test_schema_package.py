@@ -21,7 +21,7 @@ def test_schema_package():
 
 
 def test_second_archive_populates_results_material_topology():
-    """Direct v2 System fixture should populate topology with mapped fractions."""
+    """A direct core System fixture should populate topology with mapped fractions."""
     entry_archive = _load_archive('second.archive.yaml')
     normalize_all(entry_archive)
 
@@ -37,7 +37,7 @@ def test_second_archive_populates_results_material_topology():
     assert root.system_relation.type == 'root'
     assert root.child_systems == [imported.system_id]
 
-    # The direct SystemV2 entry is imported as a parser node under the root.
+    # The direct core System entry is imported as a parser node under the root.
     assert imported.label == 'second'
     assert imported.parent_system == root.system_id
     assert len(imported.child_systems) == 3

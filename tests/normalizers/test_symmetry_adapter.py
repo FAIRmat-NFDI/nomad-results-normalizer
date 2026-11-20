@@ -6,15 +6,15 @@ from nomad_simulations.schema_packages.model_system import GlobalCrystalSymmetry
 from nomad_results_normalizer.normalizers.symmetry_adapter import (
     apply_symmetry_data_to_results_symmetry,
     find_model_system_representation,
-    from_legacy_repr_symmetry,
     from_model_system,
+    from_results_structure_symmetry,
     has_complete_model_system_symmetry,
     is_symmetry_data_minimally_complete,
     wyckoff_sets_from_model_system,
 )
 
 
-def test_from_legacy_repr_symmetry_maps_core_fields():
+def test_from_results_structure_symmetry_maps_core_fields():
     repr_symmetry = SimpleNamespace(
         hall_number=123,
         hall_symbol='P 1',
@@ -30,7 +30,7 @@ def test_from_legacy_repr_symmetry_maps_core_fields():
         transformation_matrix=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
     )
 
-    symmetry_data = from_legacy_repr_symmetry(repr_symmetry)
+    symmetry_data = from_results_structure_symmetry(repr_symmetry)
 
     assert symmetry_data['space_group_number'] == 221
     assert symmetry_data['space_group_symbol'] == 'Pm-3m'
@@ -128,8 +128,8 @@ def test_complete_model_system_symmetry_provides_legacy_material_id_inputs():
     assert has_complete_model_system_symmetry(model_system)
 
 
-def test_crystal_system_is_derived_from_v2_lattice_type():
-    """The real v2 section has no `crystal_system`; it must come from `lattice_type`.
+def test_crystal_system_is_derived_from_model_system_lattice_type():
+    """ModelSystem has no `crystal_system`; it must come from `lattice_type`.
 
     Built from `GlobalCrystalSymmetry` rather than a namespace so that a schema
     rename breaks this test instead of silently emptying a search field.
