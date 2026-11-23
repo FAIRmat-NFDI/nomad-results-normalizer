@@ -565,7 +565,12 @@ class TopologyNormalizer(Normalizer):
         return topology
 
     def topology_calculation(self) -> list[System] | None:
-        """Extracts the system topology as defined in the original calculation."""
+        """Build a type-grouped topology with representative-parent descendants.
+
+        Repeated types retain their occurrence index rows. Descendants describe
+        only the first occurrence, matching the molecule/monomer shown by the
+        viewer, while aggregate groups select all instances within that parent.
+        """
         system = None
         model_systems = None
         groups = None
@@ -708,13 +713,14 @@ class TopologyNormalizer(Normalizer):
                             )
                             add_system(grouped_system, topology, parent)
                             grouped_systems[group_key] = grouped_system
+                            # The viewer displays the first molecule/monomer
+                            # row. Its descendants must describe only that
+                            # representative occurrence, not every repeated one.
+                            add_group(group.sub_systems, grouped_system)
                         if instance_indices is not None:
                             indices_by_system.setdefault(
                                 grouped_system.system_id, []
                             ).append(instance_indices)
-                        # Every occurrence contributes descendants, even when its
-                        # own system was already created for an earlier occurrence.
-                        add_group(group.sub_systems, grouped_system)
 
                 add_group(groups, original)
                 active_orbital_states = self._extract_orbital()

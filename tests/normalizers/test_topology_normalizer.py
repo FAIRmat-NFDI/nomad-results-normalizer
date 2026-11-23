@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from matid import SymmetryAnalyzer
 from nomad.client import normalize_all
 from nomad.config import config
@@ -687,7 +688,7 @@ def test_topology_calculation_multiple_same_label():
     assert len(water_system.indices) == n_indices
 
 
-def _nested_molecule_topology(molecule_names, monomer_names):
+def _nested_molecule_topology(molecule_names, monomer_names, molecule_order=(0, 1)):
     """Convert two interleaved six-particle molecules with nested monomers."""
     archive = EntryArchive(metadata=EntryMetadata())
     root = ModelSystem(
@@ -705,7 +706,8 @@ def _nested_molecule_topology(molecule_names, monomer_names):
         branch_label='molecule_group',
         particle_indices=np.arange(12, dtype=np.int32),
     )
-    for molecule_index, molecule_name in enumerate(molecule_names):
+    for molecule_index in molecule_order:
+        molecule_name = molecule_names[molecule_index]
         indices = np.arange(molecule_index, 12, 2, dtype=np.int32)
         molecule = ModelSystem(
             name=molecule_name,
@@ -776,25 +778,57 @@ def test_topology_calculation_nested_numeric_label_collisions():
             np.testing.assert_array_equal(monomer.indices[0], expected)
 
 
-def test_topology_calculation_collects_descendants_of_repeated_molecules():
-    """Every repeated molecule contributes its monomer occurrences."""
-    result = _nested_molecule_topology(('polymer', 'polymer'), ('repeat', 'repeat'))
+@pytest.mark.parametrize('molecule_order', [(0, 1), (1, 0)])
+@pytest.mark.parametrize('monomer_names', [('repeat', 'repeat'), ('end', 'repeat')])
+def test_topology_calculation_scopes_descendants_to_representative_polymer(
+    molecule_order, monomer_names
+):
+    """Type rows retain all molecules but descendants represent only the first."""
+    result = _nested_molecule_topology(
+        ('polymer', 'polymer'), monomer_names, molecule_order
+    )
 
     assert result is not None
-    assert len(result) == 5
-    polymer = next(system for system in result if system.label == 'polymer')
-    monomer_group = next(system for system in result if system.label == 'group_1')
-    monomer = next(system for system in result if system.label == 'repeat')
+    assert len(result) == 4 + len(set(monomer_names))
+    molecule_group = next(system for system in result if system.label == 'group_0')
+    by_id = {system.system_id: system for system in result}
+    polymers = [by_id[child] for child in molecule_group.child_systems]
+    assert len(polymers) == 1
+    polymer = polymers[0]
+    assert polymer.label == 'polymer'
+    assert len(by_id) == len(result)
+    assert polymer.parent_system == molecule_group.system_id
+    np.testing.assert_array_equal(molecule_group.indices, [np.arange(12)])
+    np.testing.assert_array_equal(
+        polymer.indices, [np.arange(index, 12, 2) for index in molecule_order]
+    )
+
+    expected_indices = polymer.indices[0]
+    assert len(polymer.child_systems) == 1
+    monomer_group = by_id[polymer.child_systems[0]]
     assert monomer_group.parent_system == polymer.system_id
-    assert monomer.parent_system == monomer_group.system_id
-    np.testing.assert_array_equal(
-        polymer.indices, [[0, 2, 4, 6, 8, 10], [1, 3, 5, 7, 9, 11]]
-    )
-    np.testing.assert_array_equal(monomer_group.indices, polymer.indices)
-    np.testing.assert_array_equal(
-        monomer.indices,
-        [[0, 2, 4], [6, 8, 10], [1, 3, 5], [7, 9, 11]],
-    )
+    assert monomer_group.label == 'group_1'
+    np.testing.assert_array_equal(monomer_group.indices, [expected_indices])
+
+    # The GUI flattens group rows and selects the first molecule/monomer row.
+    # Descendant groups must cover only the displayed parent, even when it is
+    # not the occurrence with the smallest global particle indices.
+    assert set(monomer_group.indices.flatten()) == set(polymer.indices[0])
+    monomers = [by_id[child] for child in monomer_group.child_systems]
+    assert len(monomers) == len(set(monomer_names))
+    for monomer in monomers:
+        assert monomer.parent_system == monomer_group.system_id
+        np.testing.assert_array_equal(
+            monomer.indices,
+            [
+                indices
+                for name, indices in zip(
+                    monomer_names, (expected_indices[:3], expected_indices[3:])
+                )
+                if name == monomer.label
+            ],
+        )
+        assert set(monomer.indices.flatten()) <= set(expected_indices)
 
 
 def test_topology_calculation_branch_label_types():
