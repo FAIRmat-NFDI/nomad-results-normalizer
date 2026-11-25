@@ -565,11 +565,12 @@ class TopologyNormalizer(Normalizer):
         return topology
 
     def topology_calculation(self) -> list[System] | None:
-        """Build a type-grouped topology with representative-parent descendants.
+        """Build topology entries from the calculation's subsystem hierarchy.
 
-        Repeated types retain their occurrence index rows. Descendants describe
-        only the first occurrence, matching the molecule/monomer shown by the
-        viewer, while aggregate groups select all instances within that parent.
+        Subsystems with the same parent, branch label, name, and particle count
+        share an entry with one index row per occurrence. Children come from the
+        first occurrence, which the viewer uses as the representative structure.
+        Group selections include all occurrence rows within that parent.
         """
         system = None
         model_systems = None
@@ -647,9 +648,8 @@ class TopologyNormalizer(Normalizer):
                 topology: dict[str, System] = {}
                 original = get_topology_original(particle_states, self.entry_archive)
                 add_system(original, topology)
-                # A label is only meaningful within its parent and hierarchy role.
-                # Keep differently sized occurrences separate as well, since their
-                # indices cannot be rows of the same rectangular array.
+                # Group entries by parent, branch label, name, and particle count.
+                # Equal particle counts keep occurrence index arrays rectangular.
                 grouped_systems: dict[
                     tuple[str, str | None, str | None, int | None], System
                 ] = {}
@@ -713,9 +713,8 @@ class TopologyNormalizer(Normalizer):
                             )
                             add_system(grouped_system, topology, parent)
                             grouped_systems[group_key] = grouped_system
-                            # The viewer displays the first molecule/monomer
-                            # row. Its descendants must describe only that
-                            # representative occurrence, not every repeated one.
+                            # Use children from the first occurrence to match
+                            # the viewer's representative selection.
                             add_group(group.sub_systems, grouped_system)
                         if instance_indices is not None:
                             indices_by_system.setdefault(

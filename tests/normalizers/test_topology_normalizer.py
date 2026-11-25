@@ -744,7 +744,7 @@ def _nested_molecule_topology(molecule_names, monomer_names, molecule_order=(0, 
 
 
 def test_topology_calculation_nested_numeric_label_collisions():
-    """Molecule and monomer IDs may overlap without losing any hierarchy."""
+    """Numeric names remain distinct across parents and branch labels."""
     result = _nested_molecule_topology(('0', '1'), ('1', '2'))
 
     assert result is not None
@@ -783,7 +783,7 @@ def test_topology_calculation_nested_numeric_label_collisions():
 def test_topology_calculation_scopes_descendants_to_representative_polymer(
     molecule_order, monomer_names
 ):
-    """Type rows retain all molecules but descendants represent only the first."""
+    """Polymer rows include each occurrence; children belong to the first polymer."""
     result = _nested_molecule_topology(
         ('polymer', 'polymer'), monomer_names, molecule_order
     )
